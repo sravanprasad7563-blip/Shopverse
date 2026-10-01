@@ -1,53 +1,108 @@
-version: "3.8"
-
 services:
+
   mysql:
     image: mysql:8.0
     container_name: shopverse-mysql
+
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: shopverse
-      MYSQL_USER: shopverse
-      MYSQL_PASSWORD: shopverse123
-    ports:
-      - "3306:3306"
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+
     volumes:
       - mysql_data:/var/lib/mysql
+
+    networks:
+      - shopverse-network
+
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -u root -p$${MYSQL_ROOT_PASSWORD} --silent"
+        ]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
+
+    restart: unless-stopped
+
 
   backend:
-    build: ./backend
+    image: shopverse-backend:${IMAGE_TAG:-secure-baseline}
     container_name: shopverse-backend
-    ports:
-      - "8080:8080"
+
     environment:
-      DB_HOST: mysql
-      DB_PORT: "3306"
-      DB_NAME: shopverse
-      DB_USER: shopverse
-      DB_PASSWORD: shopverse123
-      JWT_SECRET: local-dev-jwt-secret-key
-      FRONTEND_ORIGIN: http://localhost:3000
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
+      PORT: ${PORT}
+
+    networks:
+      - shopverse-network
+
     depends_on:
       mysql:
         condition: service_healthy
+
     restart: unless-stopped
 
+
   frontend:
-    build:
-      context: ./frontend
-      args:
-        VITE_API_URL: http://localhost:8080
+    image: shopverse-frontend:${IMAGE_TAG:-secure-baseline}
     container_name: shopverse-frontend
-    ports:
-      - "3000:80"
+
+    networks:
+      - shopverse-network
+
     depends_on:
       - backend
+
     restart: unless-stopped
+
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: shopverse-nginx
+
+    ports:
+      - "80:80"
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+    networks:
+      - shopverse-network
+
+    depends_on:
+      - backend
+      - frontend
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://127.0.0.1/health || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+    restart: unless-stopped
+
+
+networks:
+  shopverse-network:
+    driver: bridge
+
 
 volumes:
   mysql_data:
+    name: shopverse_mysql_data
