@@ -1,78 +1,33 @@
-#!/usr/bin/env groovy
-
 pipeline {
 
     agent any
 
     options {
         timestamps()
+        timeout(time: 60, unit: 'MINUTES')
         disableConcurrentBuilds()
         skipDefaultCheckout(true)
-
-        buildDiscarder(
-            logRotator(
-                numToKeepStr: '10',
-                artifactNumToKeepStr: '10'
-            )
-        )
-
-        timeout(time: 45, unit: 'MINUTES')
+        buildDiscarder(logRotator(
+            numToKeepStr: '10',
+            artifactNumToKeepStr: '10'
+        ))
     }
 
     environment {
 
-        /*
-         * ============================================================
-         * SOURCE CONTROL
-         * ============================================================
-         */
-        GIT_REPO = 'https://github.com/sravanprasad7563-blip/Shopverse.git'
-        GIT_BRANCH = 'main'
+        REPOSITORY_URL = 'https://github.com/sravanprasad7563-blip/Shopverse.git'
+        BRANCH_NAME = 'main'
 
-        /*
-         * ============================================================
-         * APPLICATION
-         * ============================================================
-         */
-        BACKEND_IMAGE  = 'shopverse-backend'
+        DEPLOY_DIR = '/opt/shopverse'
+
+        BACKEND_IMAGE = 'shopverse-backend'
         FRONTEND_IMAGE = 'shopverse-frontend'
 
         IMAGE_TAG = "${BUILD_NUMBER}"
 
-        /*
-         * ============================================================
-         * DEPLOYMENT
-         * ============================================================
-         */
-        DEPLOY_DIR = '/opt/shopverse'
-
-        /*
-         * ============================================================
-         * REPORTS
-         * ============================================================
-         */
         TRIVY_REPORT_DIR = 'trivy-reports'
 
-        /*
-         * ============================================================
-         * IMPORTANT:
-         * Jenkins service does not automatically load
-         * /etc/profile.d/go.sh.
-         *
-         * Explicitly add Go to PATH.
-         * ============================================================
-         */
-        PATH = "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
-
-        /*
-         * Prevent Go from automatically downloading another toolchain.
-         */
-        GOTOOLCHAIN = 'local'
-
-        /*
-         * Frontend API URL
-         */
-        VITE_API_URL = '/api'
+        PATH = '/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin'
     }
 
     stages {
@@ -82,8 +37,8 @@ pipeline {
          * 1. CLEAN WORKSPACE
          * ============================================================
          */
-        stage('Clean Workspace') {
 
+        stage('Clean Workspace') {
             steps {
 
                 deleteDir()
@@ -107,13 +62,13 @@ pipeline {
          * 2. CHECKOUT
          * ============================================================
          */
-        stage('Checkout') {
 
+        stage('Checkout') {
             steps {
 
                 git(
-                    branch: "${GIT_BRANCH}",
-                    url: "${GIT_REPO}"
+                    branch: "${BRANCH_NAME}",
+                    url: "${REPOSITORY_URL}"
                 )
 
                 sh '''
@@ -154,11 +109,11 @@ pipeline {
 
         /*
          * ============================================================
-         * 3. VALIDATE PROJECT
+         * 3. VALIDATE TOOLS AND PROJECT
          * ============================================================
          */
-        stage('Validate Project') {
 
+        stage('Validate Project') {
             steps {
 
                 sh '''
@@ -168,16 +123,14 @@ pipeline {
                     echo "PROJECT STRUCTURE"
                     echo "============================================================"
 
-                    find . -maxdepth 2 -type f \
-                        -not -path './.git/*' \
-                        | sort
+                    find . -maxdepth 2 -type f -not -path './.git/*' | sort
 
                     echo
                     echo "============================================================"
                     echo "GO"
                     echo "============================================================"
 
-                    which go
+                    command -v go
                     go version
 
                     echo
@@ -185,7 +138,7 @@ pipeline {
                     echo "NODE"
                     echo "============================================================"
 
-                    which node
+                    command -v node
                     node -v
 
                     echo
@@ -193,7 +146,7 @@ pipeline {
                     echo "NPM"
                     echo "============================================================"
 
-                    which npm
+                    command -v npm
                     npm -v
 
                     echo
@@ -201,7 +154,7 @@ pipeline {
                     echo "DOCKER"
                     echo "============================================================"
 
-                    which docker
+                    command -v docker
                     docker --version
 
                     echo
@@ -216,7 +169,7 @@ pipeline {
                     echo "TRIVY"
                     echo "============================================================"
 
-                    which trivy
+                    command -v trivy
                     trivy --version
 
                     echo
@@ -244,8 +197,8 @@ pipeline {
          * 4. BACKEND TEST
          * ============================================================
          */
-        stage('Backend Dependency Installation & Testing') {
 
+        stage('Backend Dependency Installation & Testing') {
             steps {
 
                 dir('backend') {
@@ -290,11 +243,11 @@ pipeline {
 
         /*
          * ============================================================
-         * 5. FRONTEND TEST + BUILD
+         * 5. FRONTEND TEST
          * ============================================================
          */
-        stage('Frontend Dependency Installation & Build') {
 
+        stage('Frontend Dependency Installation & Build') {
             steps {
 
                 dir('frontend') {
@@ -313,7 +266,10 @@ pipeline {
                         echo "NPM AUDIT"
                         echo "============================================================"
 
-                        npm audit --audit-level=high || true
+                        npm audit --audit-level=high --json > ../npm-audit.json 2>&1 || true
+
+                        echo "NPM audit completed."
+                        echo "Audit report saved as npm-audit.json"
 
                         echo
                         echo "============================================================"
@@ -339,11 +295,11 @@ pipeline {
 
         /*
          * ============================================================
-         * 6. DOCKER BUILD
+         * 6. BUILD DOCKER IMAGES
          * ============================================================
          */
-        stage('Docker Image Build') {
 
+        stage('Docker Image Build') {
             steps {
 
                 sh '''
@@ -355,11 +311,8 @@ pipeline {
 
                     docker build \
                         --pull \
-                        --label org.opencontainers.image.title="Shopverse Backend" \
-                        --label org.opencontainers.image.version="${IMAGE_TAG}" \
-                        --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
-                        -t "${BACKEND_IMAGE}:${IMAGE_TAG}" \
-                        -t "${BACKEND_IMAGE}:latest" \
+                        -t ${BACKEND_IMAGE}:${IMAGE_TAG} \
+                        -t ${BACKEND_IMAGE}:latest \
                         ./backend
 
                     echo
@@ -369,12 +322,8 @@ pipeline {
 
                     docker build \
                         --pull \
-                        --build-arg VITE_API_URL="${VITE_API_URL}" \
-                        --label org.opencontainers.image.title="Shopverse Frontend" \
-                        --label org.opencontainers.image.version="${IMAGE_TAG}" \
-                        --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
-                        -t "${FRONTEND_IMAGE}:${IMAGE_TAG}" \
-                        -t "${FRONTEND_IMAGE}:latest" \
+                        -t ${FRONTEND_IMAGE}:${IMAGE_TAG} \
+                        -t ${FRONTEND_IMAGE}:latest \
                         ./frontend
 
                     echo
@@ -382,12 +331,11 @@ pipeline {
                     echo "IMAGE VERIFICATION"
                     echo "============================================================"
 
-                    docker image inspect "${BACKEND_IMAGE}:${IMAGE_TAG}" >/dev/null
-                    docker image inspect "${FRONTEND_IMAGE}:${IMAGE_TAG}" >/dev/null
+                    docker image inspect ${BACKEND_IMAGE}:${IMAGE_TAG} >/dev/null
+                    docker image inspect ${FRONTEND_IMAGE}:${IMAGE_TAG} >/dev/null
 
-                    docker images \
-                        --filter "reference=${BACKEND_IMAGE}" \
-                        --filter "reference=${FRONTEND_IMAGE}"
+                    docker images --filter reference=${BACKEND_IMAGE} \
+                                  --filter reference=${FRONTEND_IMAGE}
 
                     echo
                     echo "Docker image build successful."
@@ -399,46 +347,39 @@ pipeline {
         /*
          * ============================================================
          * 7. TRIVY SECURITY SCAN
-         *
-         * Reports are generated.
-         *
-         * We do not stop the deployment solely because the current
-         * base image has an upstream vulnerability. This allows the
-         * CI/CD pipeline to continue while still producing security
-         * evidence for review.
          * ============================================================
          */
-        stage('Docker Image Security Scan') {
 
+        stage('Docker Image Security Scan') {
             steps {
 
                 sh '''
                     set -eu
 
-                    mkdir -p "${TRIVY_REPORT_DIR}"
+                    mkdir -p ${TRIVY_REPORT_DIR}
 
                     echo "============================================================"
-                    echo "TRIVY BACKEND SCAN"
+                    echo "TRIVY BACKEND HIGH/CRITICAL SCAN"
                     echo "============================================================"
 
                     trivy image \
                         --scanners vuln \
                         --severity HIGH,CRITICAL \
                         --format table \
-                        --output "${TRIVY_REPORT_DIR}/backend-${IMAGE_TAG}.txt" \
-                        "${BACKEND_IMAGE}:${IMAGE_TAG}" || true
+                        --output ${TRIVY_REPORT_DIR}/backend-${IMAGE_TAG}.txt \
+                        ${BACKEND_IMAGE}:${IMAGE_TAG} || true
 
                     echo
                     echo "============================================================"
-                    echo "TRIVY FRONTEND SCAN"
+                    echo "TRIVY FRONTEND HIGH/CRITICAL SCAN"
                     echo "============================================================"
 
                     trivy image \
                         --scanners vuln \
                         --severity HIGH,CRITICAL \
                         --format table \
-                        --output "${TRIVY_REPORT_DIR}/frontend-${IMAGE_TAG}.txt" \
-                        "${FRONTEND_IMAGE}:${IMAGE_TAG}" || true
+                        --output ${TRIVY_REPORT_DIR}/frontend-${IMAGE_TAG}.txt \
+                        ${FRONTEND_IMAGE}:${IMAGE_TAG} || true
 
                     echo
                     echo "============================================================"
@@ -448,8 +389,8 @@ pipeline {
                     trivy image \
                         --scanners vuln \
                         --format json \
-                        --output "${TRIVY_REPORT_DIR}/backend-${IMAGE_TAG}.json" \
-                        "${BACKEND_IMAGE}:${IMAGE_TAG}" || true
+                        --output ${TRIVY_REPORT_DIR}/backend-${IMAGE_TAG}.json \
+                        ${BACKEND_IMAGE}:${IMAGE_TAG} || true
 
                     echo
                     echo "============================================================"
@@ -459,12 +400,11 @@ pipeline {
                     trivy image \
                         --scanners vuln \
                         --format json \
-                        --output "${TRIVY_REPORT_DIR}/frontend-${IMAGE_TAG}.json" \
-                        "${FRONTEND_IMAGE}:${IMAGE_TAG}" || true
+                        --output ${TRIVY_REPORT_DIR}/frontend-${IMAGE_TAG}.json \
+                        ${FRONTEND_IMAGE}:${IMAGE_TAG} || true
 
                     echo
                     echo "Security scan completed."
-                    echo "Reports are available under ${TRIVY_REPORT_DIR}/"
                 '''
             }
         }
@@ -475,8 +415,8 @@ pipeline {
          * 8. PREPARE DEPLOYMENT
          * ============================================================
          */
-        stage('Prepare Deployment Environment') {
 
+        stage('Prepare Deployment Environment') {
             steps {
 
                 sh '''
@@ -486,11 +426,7 @@ pipeline {
                     echo "DEPLOYMENT DIRECTORY"
                     echo "============================================================"
 
-                    if [ ! -d "${DEPLOY_DIR}" ]; then
-                        echo "ERROR: Deployment directory does not exist:"
-                        echo "${DEPLOY_DIR}"
-                        exit 1
-                    fi
+                    test -d "${DEPLOY_DIR}"
 
                     cd "${DEPLOY_DIR}"
 
@@ -507,26 +443,35 @@ pipeline {
 
                     echo
                     echo "============================================================"
+                    echo "ENVIRONMENT ACCESS"
+                    echo "============================================================"
+
+                    test -r .env
+
+                    echo ".env is readable by Jenkins."
+
+                    echo
+                    echo "============================================================"
                     echo "DOCKER COMPOSE VALIDATION"
                     echo "============================================================"
 
                     export IMAGE_TAG="${IMAGE_TAG}"
 
-                    docker compose \
-                        --env-file .env \
-                        config >/tmp/shopverse-compose-${BUILD_NUMBER}.yml
+                    docker compose --env-file .env config >/tmp/shopverse-compose-${BUILD_NUMBER}.yml
 
-                    echo "Compose configuration is valid."
+                    echo "Docker Compose validation successful."
 
                     echo
                     echo "============================================================"
-                    echo "IMAGE AVAILABILITY"
+                    echo "NGINX CONFIGURATION VALIDATION"
                     echo "============================================================"
 
-                    docker image inspect "${BACKEND_IMAGE}:${IMAGE_TAG}" >/dev/null
-                    docker image inspect "${FRONTEND_IMAGE}:${IMAGE_TAG}" >/dev/null
+                    docker run --rm \
+                        -v "${DEPLOY_DIR}/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro" \
+                        nginx:1.27-alpine \
+                        nginx -t
 
-                    echo "Application images are available."
+                    echo "Nginx configuration validation successful."
                 '''
             }
         }
@@ -537,9 +482,13 @@ pipeline {
          * 9. SAVE CURRENT DEPLOYMENT STATE
          * ============================================================
          */
-        stage('Save Deployment State') {
 
+        stage('Save Deployment State') {
             steps {
+
+                script {
+                    env.DEPLOYMENT_STATE_SAVED = 'false'
+                }
 
                 sh '''
                     set -eu
@@ -547,53 +496,41 @@ pipeline {
                     cd "${DEPLOY_DIR}"
 
                     echo "============================================================"
-                    echo "SAVING CURRENT DEPLOYMENT STATE"
+                    echo "CURRENT DEPLOYMENT STATE"
                     echo "============================================================"
 
                     rm -f .previous-backend-image
                     rm -f .previous-frontend-image
-                    rm -f .previous-deployment-info
 
-                    BACKEND_CURRENT=""
+                    BACKEND_CURRENT=$(docker inspect \
+                        -f '{{.Config.Image}}' \
+                        shopverse-backend 2>/dev/null || true)
 
-                    if docker inspect shopverse-backend >/dev/null 2>&1; then
-                        BACKEND_CURRENT=$(docker inspect \
-                            -f '{{.Config.Image}}' \
-                            shopverse-backend || true)
-                    fi
-
-                    FRONTEND_CURRENT=""
-
-                    if docker inspect shopverse-frontend >/dev/null 2>&1; then
-                        FRONTEND_CURRENT=$(docker inspect \
-                            -f '{{.Config.Image}}' \
-                            shopverse-frontend || true)
-                    fi
+                    FRONTEND_CURRENT=$(docker inspect \
+                        -f '{{.Config.Image}}' \
+                        shopverse-frontend 2>/dev/null || true)
 
                     echo "Current backend image: ${BACKEND_CURRENT:-NONE}"
                     echo "Current frontend image: ${FRONTEND_CURRENT:-NONE}"
 
-                    if [ -n "${BACKEND_CURRENT}" ]; then
-                        echo "${BACKEND_CURRENT}" > .previous-backend-image
+                    if [ -n "${BACKEND_CURRENT}" ] && [ -n "${FRONTEND_CURRENT}" ]; then
+
+                        printf '%s\\n' "${BACKEND_CURRENT}" > .previous-backend-image
+                        printf '%s\\n' "${FRONTEND_CURRENT}" > .previous-frontend-image
+
+                        echo "Previous deployment state saved."
+
+                    else
+
+                        echo "No complete previous application deployment found."
+                        echo "This can be treated as the initial deployment."
+
                     fi
-
-                    if [ -n "${FRONTEND_CURRENT}" ]; then
-                        echo "${FRONTEND_CURRENT}" > .previous-frontend-image
-                    fi
-
-                    cat > .previous-deployment-info <<EOF
-BUILD_NUMBER=${BUILD_NUMBER}
-BUILD_TAG=${IMAGE_TAG}
-GIT_COMMIT=$(git -C "${WORKSPACE}" rev-parse HEAD)
-GIT_COMMIT_SHORT=$(git -C "${WORKSPACE}" rev-parse --short HEAD)
-BACKEND_IMAGE=${BACKEND_CURRENT:-NONE}
-FRONTEND_IMAGE=${FRONTEND_CURRENT:-NONE}
-SAVED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-EOF
-
-                    echo
-                    cat .previous-deployment-info
                 '''
+
+                script {
+                    env.DEPLOYMENT_STATE_SAVED = 'true'
+                }
             }
         }
 
@@ -603,9 +540,13 @@ EOF
          * 10. DEPLOY
          * ============================================================
          */
-        stage('Docker Compose Deployment') {
 
+        stage('Docker Compose Deployment') {
             steps {
+
+                script {
+                    env.DEPLOYMENT_STARTED = 'true'
+                }
 
                 sh '''
                     set -eu
@@ -613,11 +554,10 @@ EOF
                     cd "${DEPLOY_DIR}"
 
                     echo "============================================================"
-                    echo "DEPLOYMENT"
+                    echo "SHOPVERSE DEPLOYMENT"
                     echo "============================================================"
 
-                    echo "Build number: ${BUILD_NUMBER}"
-                    echo "Image tag: ${IMAGE_TAG}"
+                    echo "Deployment image tag: ${IMAGE_TAG}"
 
                     export IMAGE_TAG="${IMAGE_TAG}"
 
@@ -626,31 +566,31 @@ EOF
                     echo "MYSQL"
                     echo "============================================================"
 
-                    docker compose \
-                        --env-file .env \
-                        up -d mysql
+                    docker compose --env-file .env up -d mysql
 
+                    echo
                     echo "Waiting for MySQL..."
 
-                    MYSQL_READY=0
+                    MYSQL_READY=false
 
                     for i in $(seq 1 30); do
 
                         STATUS=$(docker inspect \
-                            -f '{{.State.Health.Status}}' \
-                            shopverse-mysql 2>/dev/null || true)
+                            -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' \
+                            shopverse-mysql 2>/dev/null || echo "unknown")
 
                         echo "MySQL health: ${STATUS}"
 
                         if [ "${STATUS}" = "healthy" ]; then
-                            MYSQL_READY=1
+                            MYSQL_READY=true
                             break
                         fi
 
                         sleep 5
+
                     done
 
-                    if [ "${MYSQL_READY}" -ne 1 ]; then
+                    if [ "${MYSQL_READY}" != "true" ]; then
                         echo "ERROR: MySQL did not become healthy."
                         docker logs --tail 100 shopverse-mysql || true
                         exit 1
@@ -661,36 +601,31 @@ EOF
                     echo "BACKEND"
                     echo "============================================================"
 
-                    docker compose \
-                        --env-file .env \
-                        up -d --no-deps backend
+                    docker compose --env-file .env up -d --force-recreate --no-deps backend
 
                     echo
                     echo "============================================================"
                     echo "FRONTEND"
                     echo "============================================================"
 
-                    docker compose \
-                        --env-file .env \
-                        up -d --no-deps frontend
+                    docker compose --env-file .env up -d --force-recreate --no-deps frontend
 
                     echo
                     echo "============================================================"
                     echo "NGINX"
                     echo "============================================================"
 
-                    docker compose \
-                        --env-file .env \
-                        up -d --no-deps nginx
+                    docker compose --env-file .env up -d --force-recreate --no-deps nginx
 
                     echo
                     echo "============================================================"
                     echo "COMPOSE STATUS"
                     echo "============================================================"
 
-                    docker compose \
-                        --env-file .env \
-                        ps
+                    docker compose --env-file .env ps
+
+                    echo
+                    echo "Deployment containers started successfully."
                 '''
             }
         }
@@ -698,11 +633,11 @@ EOF
 
         /*
          * ============================================================
-         * 11. SERVICE HEALTH CHECKS
+         * 11. HEALTH CHECKS
          * ============================================================
          */
-        stage('Service Health Checks') {
 
+        stage('Service Health Checks') {
             steps {
 
                 sh '''
@@ -714,11 +649,7 @@ EOF
                     echo "SERVICE HEALTH CHECKS"
                     echo "============================================================"
 
-                    sleep 10
-
-                    docker compose \
-                        --env-file .env \
-                        ps
+                    docker compose --env-file .env ps
 
                     echo
                     echo "============================================================"
@@ -726,14 +657,32 @@ EOF
                     echo "============================================================"
 
                     MYSQL_STATUS=$(docker inspect \
-                        -f '{{.State.Health.Status}}' \
+                        -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' \
                         shopverse-mysql)
 
                     echo "MySQL: ${MYSQL_STATUS}"
 
                     if [ "${MYSQL_STATUS}" != "healthy" ]; then
-                        echo "ERROR: MySQL is not healthy."
-                        docker logs --tail 100 shopverse-mysql || true
+                        echo "MySQL health check failed."
+                        exit 1
+                    fi
+
+                    echo
+                    echo "============================================================"
+                    echo "NGINX HEALTH"
+                    echo "============================================================"
+
+                    NGINX_STATUS=$(docker inspect \
+                        -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}unknown{{end}}' \
+                        shopverse-nginx)
+
+                    echo "Nginx: ${NGINX_STATUS}"
+
+                    if [ "${NGINX_STATUS}" != "healthy" ]; then
+                        echo "Nginx health check failed."
+
+                        docker logs --tail 100 shopverse-nginx || true
+
                         exit 1
                     fi
 
@@ -749,7 +698,7 @@ EOF
                     echo "Backend running: ${BACKEND_RUNNING}"
 
                     if [ "${BACKEND_RUNNING}" != "true" ]; then
-                        echo "ERROR: Backend container is not running."
+                        echo "Backend container is not running."
                         docker logs --tail 100 shopverse-backend || true
                         exit 1
                     fi
@@ -766,60 +715,8 @@ EOF
                     echo "Frontend running: ${FRONTEND_RUNNING}"
 
                     if [ "${FRONTEND_RUNNING}" != "true" ]; then
-                        echo "ERROR: Frontend container is not running."
+                        echo "Frontend container is not running."
                         docker logs --tail 100 shopverse-frontend || true
-                        exit 1
-                    fi
-
-                    echo
-                    echo "============================================================"
-                    echo "NGINX HEALTH"
-                    echo "============================================================"
-
-                    NGINX_RUNNING=$(docker inspect \
-                        -f '{{.State.Running}}' \
-                        shopverse-nginx)
-
-                    echo "Nginx running: ${NGINX_RUNNING}"
-
-                    if [ "${NGINX_RUNNING}" != "true" ]; then
-                        echo "ERROR: Nginx container is not running."
-                        docker logs --tail 100 shopverse-nginx || true
-                        exit 1
-                    fi
-
-                    echo
-                    echo "Waiting for HTTP health endpoint..."
-
-                    HEALTH_OK=0
-
-                    for i in $(seq 1 20); do
-
-                        if curl -fsS \
-                            --max-time 5 \
-                            http://127.0.0.1/health \
-                            >/dev/null; then
-
-                            HEALTH_OK=1
-                            echo "Nginx/backend health endpoint is healthy."
-                            break
-                        fi
-
-                        echo "Health check attempt ${i}/20 failed."
-                        sleep 3
-                    done
-
-                    if [ "${HEALTH_OK}" -ne 1 ]; then
-                        echo "ERROR: Application health endpoint failed."
-
-                        echo
-                        echo "===== NGINX LOGS ====="
-                        docker logs --tail 100 shopverse-nginx || true
-
-                        echo
-                        echo "===== BACKEND LOGS ====="
-                        docker logs --tail 100 shopverse-backend || true
-
                         exit 1
                     fi
 
@@ -835,8 +732,8 @@ EOF
          * 12. APPLICATION SMOKE TEST
          * ============================================================
          */
-        stage('Application Smoke Test') {
 
+        stage('Application Smoke Test') {
             steps {
 
                 sh '''
@@ -847,48 +744,28 @@ EOF
                     echo "============================================================"
 
                     echo
-                    echo "Health endpoint:"
-                    curl -fsS \
-                        --max-time 10 \
+                    echo "Testing /health..."
+
+                    curl --fail --silent --show-error \
+                        --max-time 15 \
                         http://127.0.0.1/health
 
                     echo
-                    echo
-
-                    echo "Frontend endpoint:"
-                    curl -fsSI \
-                        --max-time 10 \
-                        http://127.0.0.1/
 
                     echo
-                    echo "API endpoint check:"
+                    echo "Testing frontend..."
 
-                    HTTP_CODE=$(curl \
-                        -s \
-                        -o /tmp/shopverse-api-response.txt \
-                        -w '%{http_code}' \
-                        --max-time 10 \
-                        http://127.0.0.1/api/)
+                    curl --fail --silent --show-error \
+                        --max-time 15 \
+                        http://127.0.0.1/ \
+                        >/tmp/shopverse-homepage.html
 
-                    echo "API HTTP status: ${HTTP_CODE}"
+                    test -s /tmp/shopverse-homepage.html
 
-                    /*
-                     * The API root may legitimately return 404 depending
-                     * on the application's routes. The important check
-                     * here is that Nginx responds and the request reaches
-                     * the application stack.
-                     */
-                    if [ "${HTTP_CODE}" = "502" ] || \
-                       [ "${HTTP_CODE}" = "503" ] || \
-                       [ "${HTTP_CODE}" = "504" ]; then
-
-                        echo "ERROR: API gateway returned ${HTTP_CODE}."
-                        cat /tmp/shopverse-api-response.txt || true
-                        exit 1
-                    fi
+                    echo "Frontend response received."
 
                     echo
-                    echo "Application smoke test completed."
+                    echo "Application smoke tests passed."
                 '''
             }
         }
@@ -899,8 +776,8 @@ EOF
          * 13. RECORD SUCCESSFUL DEPLOYMENT
          * ============================================================
          */
-        stage('Record Successful Deployment') {
 
+        stage('Record Successful Deployment') {
             steps {
 
                 sh '''
@@ -912,63 +789,56 @@ EOF
                     echo "RECORD SUCCESSFUL DEPLOYMENT"
                     echo "============================================================"
 
-                    cat > .last-successful-deployment <<EOF
-BUILD_NUMBER=${BUILD_NUMBER}
-IMAGE_TAG=${IMAGE_TAG}
-GIT_COMMIT=$(git -C "${WORKSPACE}" rev-parse HEAD)
-GIT_COMMIT_SHORT=$(git -C "${WORKSPACE}" rev-parse --short HEAD)
-BACKEND_IMAGE=${BACKEND_IMAGE}:${IMAGE_TAG}
-FRONTEND_IMAGE=${FRONTEND_IMAGE}:${IMAGE_TAG}
-DEPLOYED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-EOF
+                    printf '%s\\n' "${IMAGE_TAG}" > .current-image-tag
 
-                    cat .last-successful-deployment
+                    docker inspect \
+                        -f '{{.Config.Image}}' \
+                        shopverse-backend \
+                        > .current-backend-image
+
+                    docker inspect \
+                        -f '{{.Config.Image}}' \
+                        shopverse-frontend \
+                        > .current-frontend-image
+
+                    echo "Current deployment recorded."
 
                     echo
-                    echo "Deployment completed successfully."
+                    echo "Backend:"
+                    cat .current-backend-image
+
+                    echo
+                    echo "Frontend:"
+                    cat .current-frontend-image
                 '''
+
+                script {
+                    env.DEPLOYMENT_SUCCESS = 'true'
+                }
             }
         }
 
 
         /*
          * ============================================================
-         * 14. CLEANUP OLD IMAGES
+         * 14. CLEANUP
          * ============================================================
          */
-        stage('Docker Image Cleanup') {
 
+        stage('Docker Image Cleanup') {
             steps {
 
                 sh '''
                     set +e
 
                     echo "============================================================"
-                    echo "DOCKER IMAGE CLEANUP"
+                    echo "DOCKER CLEANUP"
                     echo "============================================================"
 
-                    CURRENT_BACKEND="${BACKEND_IMAGE}:${IMAGE_TAG}"
-                    CURRENT_FRONTEND="${FRONTEND_IMAGE}:${IMAGE_TAG}"
-
-                    echo "Current backend image: ${CURRENT_BACKEND}"
-                    echo "Current frontend image: ${CURRENT_FRONTEND}"
-
-                    /*
-                     * Remove dangling images only.
-                     *
-                     * Do NOT aggressively delete tagged images because
-                     * rollback depends on previous tagged images.
-                     */
                     docker image prune -f
 
                     echo
-                    echo "Remaining Shopverse images:"
-
-                    docker images \
-                        --filter "reference=${BACKEND_IMAGE}" \
-                        --filter "reference=${FRONTEND_IMAGE}"
-
-                    exit 0
+                    echo "Cleanup completed."
                 '''
             }
         }
@@ -980,6 +850,7 @@ EOF
      * POST ACTIONS
      * ================================================================
      */
+
     post {
 
         always {
@@ -991,19 +862,7 @@ PIPELINE COMPLETE
 '''
 
             archiveArtifacts(
-                artifacts: 'trivy-reports/**/*',
-                allowEmptyArchive: true,
-                fingerprint: true
-            )
-
-            archiveArtifacts(
-                artifacts: 'Jenkinsfile',
-                allowEmptyArchive: true,
-                fingerprint: true
-            )
-
-            archiveArtifacts(
-                artifacts: 'backend/go.mod,backend/go.sum,frontend/package.json,frontend/package-lock.json',
+                artifacts: 'trivy-reports/**/*,npm-audit.json',
                 allowEmptyArchive: true,
                 fingerprint: true
             )
@@ -1017,7 +876,7 @@ PIPELINE COMPLETE
                 echo "============================================================"
 
                 docker ps \
-                    --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' \
+                    --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}' \
                     | grep -E 'shopverse|NAMES' || true
 
                 echo
@@ -1026,8 +885,8 @@ PIPELINE COMPLETE
                 echo "============================================================"
 
                 docker images \
-                    --filter "reference=shopverse-backend" \
-                    --filter "reference=shopverse-frontend" || true
+                    --filter reference=shopverse-backend \
+                    --filter reference=shopverse-frontend || true
             '''
         }
 
@@ -1036,15 +895,39 @@ PIPELINE COMPLETE
 
             echo '''
 ============================================================
-SHOPVERSE PIPELINE SUCCESS
+SHOPVERSE CI/CD SUCCESS
 ============================================================
 
-Build:
-Deployment:
-Health checks:
-Smoke test:
+Pipeline completed successfully.
 
-All completed successfully.
+Application:
+    ShopVerse
+
+Deployment:
+    Docker Compose
+
+Backend:
+    Go
+
+Frontend:
+    Node / Vite
+
+Security:
+    Trivy
+
+Reverse Proxy:
+    Nginx
+
+Health Checks:
+    MySQL
+    Backend
+    Frontend
+    Nginx
+
+Smoke Tests:
+    /health
+    /
+
 ============================================================
 '''
         }
@@ -1059,7 +942,8 @@ SHOPVERSE PIPELINE FAILED
 
 A pipeline stage failed.
 
-The deployment rollback procedure will now be evaluated.
+The rollback procedure will now be evaluated.
+
 ============================================================
 '''
 
@@ -1079,84 +963,94 @@ The deployment rollback procedure will now be evaluated.
                 echo "ROLLBACK CHECK"
                 echo "============================================================"
 
+                if [ "${DEPLOYMENT_STARTED:-false}" != "true" ]; then
+
+                    echo "Deployment was never started."
+                    echo "Rollback is not required."
+
+                    exit 0
+
+                fi
+
+                if [ "${DEPLOYMENT_SUCCESS:-false}" = "true" ]; then
+
+                    echo "Deployment completed successfully."
+                    echo "Rollback is not required."
+
+                    exit 0
+
+                fi
+
                 if [ ! -f .previous-backend-image ] || \
                    [ ! -f .previous-frontend-image ]; then
 
                     echo "No complete previous deployment state found."
-                    echo "Rollback will not be attempted."
+                    echo "Rollback cannot be performed automatically."
+
                     exit 0
                 fi
 
-                PREVIOUS_BACKEND=$(cat .previous-backend-image)
-                PREVIOUS_FRONTEND=$(cat .previous-frontend-image)
+                PREVIOUS_BACKEND_IMAGE=$(cat .previous-backend-image)
+                PREVIOUS_FRONTEND_IMAGE=$(cat .previous-frontend-image)
 
                 echo "Previous backend image:"
-                echo "${PREVIOUS_BACKEND}"
+                echo "${PREVIOUS_BACKEND_IMAGE}"
 
+                echo
                 echo "Previous frontend image:"
-                echo "${PREVIOUS_FRONTEND}"
+                echo "${PREVIOUS_FRONTEND_IMAGE}"
 
-                if [ -z "${PREVIOUS_BACKEND}" ] || \
-                   [ -z "${PREVIOUS_FRONTEND}" ]; then
+                PREVIOUS_BACKEND_TAG="${PREVIOUS_BACKEND_IMAGE#shopverse-backend:}"
+                PREVIOUS_FRONTEND_TAG="${PREVIOUS_FRONTEND_IMAGE#shopverse-frontend:}"
 
-                    echo "Previous image information is incomplete."
+                if [ "${PREVIOUS_BACKEND_TAG}" != "${PREVIOUS_FRONTEND_TAG}" ]; then
+                    echo "Backend and frontend previous tags do not match."
+                    echo "Rollback aborted."
                     exit 0
                 fi
+
+                ROLLBACK_TAG="${PREVIOUS_BACKEND_TAG}"
 
                 echo
-                echo "Checking previous images..."
+                echo "Rollback image tag: ${ROLLBACK_TAG}"
 
-                if ! docker image inspect "${PREVIOUS_BACKEND}" >/dev/null 2>&1; then
-                    echo "Previous backend image is not available."
-                    exit 0
-                fi
-
-                if ! docker image inspect "${PREVIOUS_FRONTEND}" >/dev/null 2>&1; then
-                    echo "Previous frontend image is not available."
-                    exit 0
-                fi
+                export IMAGE_TAG="${ROLLBACK_TAG}"
 
                 echo
                 echo "============================================================"
-                echo "STARTING ROLLBACK"
+                echo "ROLLING BACK BACKEND"
                 echo "============================================================"
 
-                export IMAGE_TAG="${BUILD_NUMBER}"
+                docker compose --env-file .env \
+                    up -d \
+                    --force-recreate \
+                    --no-deps \
+                    backend
 
-                /*
-                 * docker-compose.yml uses IMAGE_TAG for both
-                 * application images.
-                 *
-                 * Therefore create temporary rollback tags that match
-                 * the Compose configuration.
-                 */
+                echo
+                echo "============================================================"
+                echo "ROLLING BACK FRONTEND"
+                echo "============================================================"
 
-                docker tag \
-                    "${PREVIOUS_BACKEND}" \
-                    "shopverse-backend:rollback-${BUILD_NUMBER}"
+                docker compose --env-file .env \
+                    up -d \
+                    --force-recreate \
+                    --no-deps \
+                    frontend
 
-                docker tag \
-                    "${PREVIOUS_FRONTEND}" \
-                    "shopverse-frontend:rollback-${BUILD_NUMBER}"
+                echo
+                echo "============================================================"
+                echo "ROLLING BACK NGINX"
+                echo "============================================================"
 
-                /*
-                 * Temporarily change IMAGE_TAG to rollback tag.
-                 *
-                 * Both application images receive the same tag.
-                 */
-                export IMAGE_TAG="rollback-${BUILD_NUMBER}"
+                docker compose --env-file .env \
+                    up -d \
+                    --force-recreate \
+                    --no-deps \
+                    nginx
 
-                docker compose \
-                    --env-file .env \
-                    up -d --no-deps backend
-
-                docker compose \
-                    --env-file .env \
-                    up -d --no-deps frontend
-
-                docker compose \
-                    --env-file .env \
-                    up -d nginx
+                echo
+                echo "Waiting for rollback services..."
 
                 sleep 10
 
@@ -1165,54 +1059,39 @@ The deployment rollback procedure will now be evaluated.
                 echo "ROLLBACK HEALTH CHECK"
                 echo "============================================================"
 
-                MYSQL_STATUS=$(docker inspect \
-                    -f '{{.State.Health.Status}}' \
-                    shopverse-mysql 2>/dev/null || true)
+                docker compose --env-file .env ps
 
-                echo "MySQL: ${MYSQL_STATUS}"
-
-                BACKEND_RUNNING=$(docker inspect \
-                    -f '{{.State.Running}}' \
-                    shopverse-backend 2>/dev/null || true)
-
-                echo "Backend: ${BACKEND_RUNNING}"
-
-                FRONTEND_RUNNING=$(docker inspect \
-                    -f '{{.State.Running}}' \
-                    shopverse-frontend 2>/dev/null || true)
-
-                echo "Frontend: ${FRONTEND_RUNNING}"
-
-                NGINX_RUNNING=$(docker inspect \
-                    -f '{{.State.Running}}' \
-                    shopverse-nginx 2>/dev/null || true)
-
-                echo "Nginx: ${NGINX_RUNNING}"
-
-                if curl -fsS \
-                    --max-time 10 \
+                if ! curl \
+                    --fail \
+                    --silent \
+                    --show-error \
+                    --max-time 15 \
                     http://127.0.0.1/health \
                     >/dev/null; then
 
-                    echo
-                    echo "============================================================"
-                    echo "ROLLBACK SUCCESSFUL"
-                    echo "============================================================"
-
-                else
-
-                    echo
-                    echo "============================================================"
-                    echo "ROLLBACK HEALTH CHECK FAILED"
-                    echo "============================================================"
+                    echo "ROLLBACK FAILED: /health check failed."
 
                     docker logs --tail 100 shopverse-backend || true
-                    docker logs --tail 100 shopverse-frontend || true
                     docker logs --tail 100 shopverse-nginx || true
+
+                    exit 1
                 fi
 
                 echo
-                echo "Rollback procedure completed."
+                echo "Rollback completed successfully."
+
+                printf '%s\\n' "${ROLLBACK_TAG}" > .current-image-tag
+
+                docker inspect \
+                    -f '{{.Config.Image}}' \
+                    shopverse-backend \
+                    > .current-backend-image
+
+                docker inspect \
+                    -f '{{.Config.Image}}' \
+                    shopverse-frontend \
+                    > .current-frontend-image
+
             '''
         }
     }
